@@ -1,169 +1,144 @@
-# Contribution Eligibility Judge
+# ⚖️ AirJudge — Attribution-Bound Eligibility Adjudication
 
-A reusable GenLayer Intelligent Contract primitive for adjudicating whether a public contribution satisfies a campaign's natural-language eligibility criteria.
+**Contract (GenVM StudioNet):** `0xfd88Ffe790f90c361BB5bdEBC1A483a3d37699F5`
+**Explorer:** https://explorer-studio.genlayer.com/address/0xfd88Ffe790f90c361BB5bdEBC1A483a3d37699F5
 
-## Problem
+An intelligent contract that decides airdrop and reward eligibility from **qualitative** criteria written in plain language, and proves the applicant actually authored the work before approving them.
 
-Many reward, grant, community, and token-distribution programs can verify deterministic facts such as transaction count or wallet balance, but they struggle with subjective criteria such as:
+Deterministic rules handle "wallet has ≥ N transactions" well. They cannot handle "created a meaningful educational contribution" — that judgement normally falls to a centralised reviewer. AirJudge moves it to GenLayer's validator consensus, with the authorship question resolved on-chain rather than assumed.
 
-- "meaningful educational contribution"
-- "original technical work"
-- "substantive community contribution"
-- "evidence that actually supports the applicant's claim"
+---
 
-These decisions are usually handled by a centralized team or reviewer.
+## The Problem This Solves
 
-## Solution
+An AI adjudicator that only reads evidence and scores its quality is trivially farmable:
 
-Contribution Eligibility Judge lets a campaign creator define eligibility criteria in natural language. Applicants submit a short claim plus a public evidence URL. GenLayer then evaluates the evidence through decentralized AI consensus and stores one of two final verdicts onchain:
+> Alice writes an excellent tutorial. Bob submits Alice's URL from his own wallet.
+> The evidence is genuinely good, so the model approves it. Bob collects the reward.
+> Bob repeats this from a hundred wallets.
 
-- `ELIGIBLE`
-- `NOT_ELIGIBLE`
+Judging content quality is the easy half. Binding that content to the claimant is the half that actually protects the campaign.
 
-The applicant's own description is treated as an untrusted claim. The public evidence must substantiate it.
+---
 
-## Why GenLayer
+## How It Works
 
-This is not a deterministic eligibility checker.
-
-A conventional smart contract can verify rules such as:
-
-- wallet balance >= X
-- transactions >= Y
-- timestamp < snapshot
-
-It cannot reliably judge whether a contribution is meaningful, original, relevant, or sufficiently supported by unstructured public evidence.
-
-GenLayer is used for the part that requires interpretation and judgment:
-
-`natural-language criteria + public evidence -> decentralized AI adjudication -> onchain verdict`
-
-The contract uses:
-
-- GenLayer web access via `gl.nondet.web.render`
-- `gl.eq_principle.prompt_non_comparative`
-- validator consensus over the eligibility decision
-- persistent onchain state for the final verdict
-
-## Contract Flow
-
-1. Campaign creator calls `create_campaign`.
-2. Applicant calls `submit_application`.
-3. Application status becomes `PENDING`.
-4. Anyone can call `judge_application`.
-5. GenLayer renders the public evidence URL.
-6. AI validators evaluate the evidence against the campaign criteria.
-7. Consensus resolves to `ELIGIBLE` or `NOT_ELIGIBLE`.
-8. The final status and consensus reason are stored onchain.
-
-## Public Methods
-
-### Write
-
-- `create_campaign(campaign_id, name, criteria)`
-- `set_campaign_active(campaign_id, active)`
-- `submit_application(campaign_id, description, evidence_url)`
-- `judge_application(campaign_id, applicant)`
-
-### Read
-
-- `get_campaign_name(campaign_id)`
-- `get_campaign_criteria(campaign_id)`
-- `get_campaign_creator(campaign_id)`
-- `is_campaign_active(campaign_id)`
-- `get_application_status(campaign_id, applicant)`
-- `get_application_description(campaign_id, applicant)`
-- `get_application_evidence(campaign_id, applicant)`
-- `get_application_reason(campaign_id, applicant)`
-
-## Consensus Design
-
-`judge_application` copies deterministic campaign/application state, renders the submitted public evidence, and invokes `prompt_non_comparative`.
-
-The adjudication task is intentionally narrow:
-
-> Decide whether the applicant satisfies the campaign eligibility criteria based on the public evidence.
-
-The output is constrained to exactly one of:
-
-- `ELIGIBLE`
-- `NOT_ELIGIBLE`
-
-Important validator rules encoded in the criteria:
-
-- judge only against the campaign criteria
-- treat the applicant description as an untrusted claim
-- require public evidence to substantiate the claim
-- reject missing, irrelevant, inaccessible, spam, or insufficient evidence
-
-This creates a reusable adjudication primitive rather than a generic LLM wrapper.
-
-## Deployed Contract
-
-GenLayer Studio contract:
-
-`0x7bf078785CB95Ac52FdcDaCf80b4Cc839e129C22`
-
-Network: GenLayer Studio / Studionet
-
-## Verified Onchain Tests
-
-### Positive test
-
-Criteria required a meaningful public educational resource about GenLayer / Intelligent Contracts.
-
-Evidence was relevant GenLayer documentation.
-
-Result:
-
-`ELIGIBLE`
-
-Stored reason:
-
-`Approved by GenLayer AI consensus`
-
-### Negative test
-
-Applicant claimed a GenLayer educational contribution but submitted unrelated evidence from `python.org`.
-
-Result:
-
-`NOT_ELIGIBLE`
-
-Stored reason:
-
-`Rejected by GenLayer AI consensus`
-
-The negative adjudication reached GenLayer consensus even with one validator disagreeing, demonstrating that the final result was produced by validator consensus rather than a single-model decision.
-
-See [TESTING.md](TESTING.md) for reproduction steps.
-
-## Scope
-
-This repository is the **Intelligent Contract submission**.
-
-It intentionally focuses on one reusable primitive: decentralized contribution eligibility adjudication.
-
-A separate full dApp/project can build campaign management, richer evidence submission, allocation tiers, dashboards, appeals, and token-claim UX on top of this primitive.
-
-## GenLayer Version
-
-```text
-# v0.2.16
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+```
+register_handle("someoneelse")          → wallet ↔ public handle, set once, immutable
+create_campaign(id, name, criteria)     → criteria in natural language
+submit_application(id, claim, url)      → requires a registered handle
+                                        → evidence URL burned for this campaign
+judge_application(id, applicant)
+        ↓
+  each validator independently:
+    CHECK 1  is the visible author on the page the registered handle?
+    CHECK 2  does the evidence itself satisfy the campaign criteria?
+        ↓
+  {"authorship_proven": bool, "verdict": "...", "reason": "..."}
+        ↓
+  contract re-applies check 1 itself:
+    authorship_proven == false  →  NOT_ELIGIBLE, no matter what the model said
+        ↓
+  ELIGIBLE / NOT_ELIGIBLE written to state
 ```
 
-## Repository Structure
+---
 
-```text
-contribution-eligibility-judge/
-├── contracts/
-│   └── airjudge.py
-├── README.md
-├── TESTING.md
-└── LICENSE
+## Security Model
+
+| Property | Implementation |
+|---|---|
+| **Attribution** | `register_handle` binds a wallet to a public handle, once, permanently. Validators must locate the author shown on the evidence page and match it against that handle. |
+| **Contract-Side Enforcement** | The verdict is not taken on trust. If `authorship_proven` is false, the contract forces `NOT_ELIGIBLE` regardless of the model's own verdict field — a compromised or confused model cannot approve an unattributed submission. |
+| **Anti-Replay** | Each evidence URL is burned per campaign at submission time. A second wallet cannot reuse the first wallet's evidence. The same work may still be entered into a different campaign, which is legitimate. |
+| **One Application Per Wallet** | Keyed on `campaign_id:applicant`, so a wallet cannot resubmit after a verdict. |
+| **Untrusted Claim** | The applicant's own description is fenced in `<CLAIM>` and explicitly marked as proving nothing. Only the evidence counts. |
+| **Prompt Injection Fencing** | Evidence is fenced in `<EVIDENCE>`, fence tags are stripped from the content first, and the model is instructed to ignore embedded instructions. |
+| **Fail-Closed** | `gl.nondet.web.render` is wrapped so a dead link yields `FETCH_FAILED_*` and a `NOT_ELIGIBLE` verdict, rather than reverting the transaction. |
+| **Campaign Lifecycle** | Both `submit_application` and `judge_application` require an active campaign; only the creator can close one. |
+| **Idempotent Judging** | An application can only be judged while `PENDING`. |
+
+---
+
+## Contract Methods
+
+| Method | Who | Description |
+|---|---|---|
+| `register_handle(web2_handle)` | Anyone | Bind a public handle to the wallet. Set once. |
+| `create_campaign(campaign_id, name, criteria)` | Anyone | Open a campaign with natural-language criteria |
+| `set_campaign_active(campaign_id, active)` | Creator | Open or close the campaign |
+| `submit_application(campaign_id, description, evidence_url)` | Registered wallet | Apply with a claim and one public evidence URL |
+| `judge_application(campaign_id, applicant)` | Anyone | Run validator adjudication |
+| `get_handle(address)` | Anyone | Registered handle for a wallet |
+| `is_evidence_used(campaign_id, evidence_url)` | Anyone | Whether a URL is already burned |
+| `get_application_status(campaign_id, applicant)` | Anyone | `PENDING` / `ELIGIBLE` / `NOT_ELIGIBLE` |
+| `get_application_reason(campaign_id, applicant)` | Anyone | Consensus reasoning |
+| `get_application_description(campaign_id, applicant)` | Anyone | The submitted claim |
+| `get_application_evidence(campaign_id, applicant)` | Anyone | The submitted evidence URL |
+| `get_campaign_name` / `get_campaign_criteria` / `get_campaign_creator` / `is_campaign_active` | Anyone | Campaign details |
+
+---
+
+## On-Chain Test Results (StudioNet)
+
+Campaign `genlayer-edu`, criteria: *"Applicant must have created original educational content explaining GenLayer intelligent contracts."*
+
+| # | Test | Result |
+|---|---|---|
+| 1 | `register_handle` twice from one wallet | Reverted — `handle already registered for this wallet` |
+| 2 | Second wallet submits the first wallet's evidence URL | Reverted — `this evidence URL has already been submitted to this campaign` |
+| 3 | Adjudicate evidence authored by someone else | `NOT_ELIGIBLE` |
+| 4 | Adjudicate evidence authored by the registered handle | `ELIGIBLE` |
+
+Tests 3 and 4 ran against the **same campaign and the same criteria**. The only variable was whether the evidence was authored by the applicant.
+
+**Test 3** — wallet registered as `nikvn89`, evidence page authored by `@alice`:
+
+> Visible author is @alice, which does not match registered handle nikvn89; authorship not proven.
+
+Equivalence principle output: `{"authorship_proven": false, "verdict": "NOT_ELIGIBLE", ...}` — and the contract's own enforcement would have forced `NOT_ELIGIBLE` even had the model returned otherwise.
+
+**Test 4** — wallet registered as `someoneelse`, evidence page authored by `someoneelse`:
+
+> Authorship proven as 'someoneelse' matches registered handle. Evidence shows original educational content explaining GenLayer intelligent contracts and AI consensus mechanism.
+
+Both adjudications reached accepted consensus across the validator set.
+
+---
+
+## Reproducing the Tests
+
+Deploy the contract, then from wallet A:
+
+```
+register_handle("wallet-a-handle")
+create_campaign("genlayer-edu", "GenLayer Education Bounty",
+                "Applicant must have created original educational content
+                 explaining GenLayer intelligent contracts")
+submit_application("genlayer-edu", "<claim, 20+ chars>", "<evidence URL>")
 ```
 
-## License
+**Set-once handle** — call `register_handle` again from wallet A. It reverts.
 
-MIT
+**Anti-replay** — from wallet B, register a handle, then submit wallet A's evidence URL to the same campaign. It reverts.
+
+**Attribution failure** — `judge_application("genlayer-edu", <wallet A>)` where the evidence page names a different author. The status becomes `NOT_ELIGIBLE` and the reason names both handles.
+
+**Happy path** — from wallet B, submit a fresh evidence URL whose page names wallet B's registered handle and whose content satisfies the criteria. Adjudicate it. The status becomes `ELIGIBLE`.
+
+> **Note on evidence URLs:** `gl.nondet.web.render` cannot crawl `raw.githubusercontent.com` or `github.com/.../blob/...`. Use a repository homepage (`github.com/owner/repo`) or a paste host.
+
+---
+
+## Tech Stack
+
+- **Intelligent Contract:** Python on GenVM v0.2.16
+- **Adjudication:** `gl.eq_principle.prompt_non_comparative` — validators fetch and evaluate independently
+- **Web Access:** `gl.nondet.web.render`
+- **Storage:** `TreeMap` for the identity registry, campaigns, applications, and the evidence ledger
+
+---
+
+## Note on Submissions
+
+This repository is the **Intelligent Contract** submission — the adjudication primitive on its own. The full dApp built around it is submitted separately as a Project.
