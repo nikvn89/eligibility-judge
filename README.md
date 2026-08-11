@@ -1,7 +1,7 @@
 # ⚖️ AirJudge — Attribution-Bound Eligibility Adjudication
 
-**Contract (GenVM StudioNet):** `DEPLOY_ADDRESS_HERE`
-**Explorer:** `https://explorer-studio.genlayer.com/address/DEPLOY_ADDRESS_HERE`
+**Contract (GenVM StudioNet):** `0xA71B49A47972aEe54CD622c5c9AbcC799061cbbD`
+**Explorer:** https://explorer-studio.genlayer.com/address/0xA71B49A47972aEe54CD622c5c9AbcC799061cbbD
 
 An intelligent contract that decides airdrop and reward eligibility from **qualitative** criteria written in plain language, and proves the applicant actually authored the work before approving them.
 
