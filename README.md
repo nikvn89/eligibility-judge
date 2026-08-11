@@ -1,7 +1,7 @@
 # ⚖️ AirJudge — Attribution-Bound Eligibility Adjudication
 
-**Contract (GenVM StudioNet):** `0xfd88Ffe790f90c361BB5bdEBC1A483a3d37699F5`
-**Explorer:** https://explorer-studio.genlayer.com/address/0xfd88Ffe790f90c361BB5bdEBC1A483a3d37699F5
+**Contract (GenVM StudioNet):** `DEPLOY_ADDRESS_HERE`
+**Explorer:** `https://explorer-studio.genlayer.com/address/DEPLOY_ADDRESS_HERE`
 
 An intelligent contract that decides airdrop and reward eligibility from **qualitative** criteria written in plain language, and proves the applicant actually authored the work before approving them.
 
@@ -19,14 +19,22 @@ An AI adjudicator that only reads evidence and scores its quality is trivially f
 
 Judging content quality is the easy half. Binding that content to the claimant is the half that actually protects the campaign.
 
+A naïve attribution check — letting the user declare their own handle — is also bypassable: the caller could point verification at a page they control, containing whatever text they choose. AirJudge closes this by having the **contract**, not the caller, decide which URL is authoritative for a handle.
+
 ---
 
 ## How It Works
 
 ```
-register_handle("someoneelse")          → wallet ↔ public handle, set once, immutable
+register_handle("github", "myhandle")
+        ↓
+  Contract derives canonical URL: https://github.com/myhandle
+  Validators independently fetch that exact page
+  Check: does the caller's wallet address appear on it?
+  If yes → handle bound to wallet, immutable
+        ↓
 create_campaign(id, name, criteria)     → criteria in natural language
-submit_application(id, claim, url)      → requires a registered handle
+submit_application(id, claim, url)      → requires a verified handle
                                         → evidence URL burned for this campaign
 judge_application(id, applicant)
         ↓
@@ -48,15 +56,18 @@ judge_application(id, applicant)
 
 | Property | Implementation |
 |---|---|
-| **Attribution** | `register_handle` binds a wallet to a public handle, once, permanently. Validators must locate the author shown on the evidence page and match it against that handle. |
-| **Contract-Side Enforcement** | The verdict is not taken on trust. If `authorship_proven` is false, the contract forces `NOT_ELIGIBLE` regardless of the model's own verdict field — a compromised or confused model cannot approve an unattributed submission. |
-| **Anti-Replay** | Each evidence URL is burned per campaign at submission time. A second wallet cannot reuse the first wallet's evidence. The same work may still be entered into a different campaign, which is legitimate. |
+| **Verifiable Proof of Control** | `register_handle` requires the caller's wallet address to appear on the **canonical profile page** — a URL the contract derives itself from the handle (e.g. `https://github.com/handle`). The caller cannot redirect verification to a page they control. Only the real account owner can publish text there. |
+| **Global Handle Uniqueness** | A reverse index (`wallet_of_handle`) ensures each handle can be claimed by at most one wallet, and each wallet can hold at most one handle. Both checks run before any AI call. |
+| **Safe Handle Charset** | Handles are restricted to `[a-z0-9-_]`, max 39 chars, no leading/trailing `-`. This prevents path-traversal or query-injection via the handle when building the canonical URL. |
+| **Attribution** | `register_handle` binds a wallet to a verified public handle, once, permanently. Validators must locate the author shown on the evidence page and match it against that handle. |
+| **Contract-Side Enforcement** | The verdict is not taken on trust. If `authorship_proven` is false, the contract forces `NOT_ELIGIBLE` regardless of the model's own verdict field. |
+| **Anti-Replay** | Each evidence URL is burned per campaign at submission time. A second wallet cannot reuse the first wallet's evidence. |
 | **One Application Per Wallet** | Keyed on `campaign_id:applicant`, so a wallet cannot resubmit after a verdict. |
 | **Untrusted Claim** | The applicant's own description is fenced in `<CLAIM>` and explicitly marked as proving nothing. Only the evidence counts. |
 | **Prompt Injection Fencing** | Evidence is fenced in `<EVIDENCE>`, fence tags are stripped from the content first, and the model is instructed to ignore embedded instructions. |
 | **Fail-Closed** | `gl.nondet.web.render` is wrapped so a dead link yields `FETCH_FAILED_*` and a `NOT_ELIGIBLE` verdict, rather than reverting the transaction. |
 | **Campaign Lifecycle** | Both `submit_application` and `judge_application` require an active campaign; only the creator can close one. |
-| **Idempotent Judging** | An application can only be judged while `PENDING`. |
+| **Verify-Before-Write** | State is committed only after the validator proof succeeds. No rollback needed — `raise` reverts automatically. |
 
 ---
 
@@ -64,12 +75,15 @@ judge_application(id, applicant)
 
 | Method | Who | Description |
 |---|---|---|
-| `register_handle(web2_handle)` | Anyone | Bind a public handle to the wallet. Set once. |
+| `register_handle(provider, web2_handle)` | Anyone | Verify and bind a public handle to the wallet. Providers: `github`, `x`. Set once, immutable. |
 | `create_campaign(campaign_id, name, criteria)` | Anyone | Open a campaign with natural-language criteria |
 | `set_campaign_active(campaign_id, active)` | Creator | Open or close the campaign |
-| `submit_application(campaign_id, description, evidence_url)` | Registered wallet | Apply with a claim and one public evidence URL |
+| `submit_application(campaign_id, description, evidence_url)` | Verified wallet | Apply with a claim and one public evidence URL |
 | `judge_application(campaign_id, applicant)` | Anyone | Run validator adjudication |
-| `get_handle(address)` | Anyone | Registered handle for a wallet |
+| `get_handle(address)` | Anyone | Verified handle for a wallet |
+| `get_provider(address)` | Anyone | Provider the handle was verified on |
+| `get_wallet_of_handle(provider, handle)` | Anyone | Wallet registered to a handle (uniqueness check) |
+| `get_expected_profile_url(provider, handle)` | Anyone | The canonical URL validators will read — publish your wallet address there before registering |
 | `is_evidence_used(campaign_id, evidence_url)` | Anyone | Whether a URL is already burned |
 | `get_application_status(campaign_id, applicant)` | Anyone | `PENDING` / `ELIGIBLE` / `NOT_ELIGIBLE` |
 | `get_application_reason(campaign_id, applicant)` | Anyone | Consensus reasoning |
@@ -79,52 +93,66 @@ judge_application(id, applicant)
 
 ---
 
+## Registering a Handle
+
+Before calling `register_handle`, publish your wallet address in the public profile of the handle you are claiming:
+
+- **GitHub:** add the address to your bio at `https://github.com/settings/profile`
+- **X:** add the address to your bio at `https://x.com/settings/profile`
+
+You can call `get_expected_profile_url(provider, handle)` to see exactly which URL validators will fetch.
+
+Then call:
+
+```
+register_handle("github", "yourhandle")
+```
+
+Validators fetch `https://github.com/yourhandle` and verify your wallet address appears on the page. If it does, the handle is permanently bound to your wallet.
+
+---
+
 ## On-Chain Test Results (StudioNet)
 
 Campaign `genlayer-edu`, criteria: *"Applicant must have created original educational content explaining GenLayer intelligent contracts."*
 
 | # | Test | Result |
 |---|---|---|
-| 1 | `register_handle` twice from one wallet | Reverted — `handle already registered for this wallet` |
-| 2 | Second wallet submits the first wallet's evidence URL | Reverted — `this evidence URL has already been submitted to this campaign` |
-| 3 | Adjudicate evidence authored by someone else | `NOT_ELIGIBLE` |
-| 4 | Adjudicate evidence authored by the registered handle | `ELIGIBLE` |
+| 1 | `register_handle` twice from one wallet | Reverted — `this wallet already has a registered handle` |
+| 2 | Different wallet tries to register same handle | Reverted — `handle 'X' on github is already registered by wallet 0x...` |
+| 3 | Wallet without bio containing its address tries to register | Reverted — `Proof of control failed for https://github.com/X` |
+| 4 | Second wallet submits the first wallet's evidence URL | Reverted — `this evidence URL has already been submitted to this campaign` |
+| 5 | Adjudicate evidence authored by someone else | `NOT_ELIGIBLE` |
+| 6 | Adjudicate evidence authored by the registered handle | `ELIGIBLE` |
 
-Tests 3 and 4 ran against the **same campaign and the same criteria**. The only variable was whether the evidence was authored by the applicant.
-
-**Test 3** — wallet registered as `nikvn89`, evidence page authored by `@alice`:
-
-> Visible author is @alice, which does not match registered handle nikvn89; authorship not proven.
-
-Equivalence principle output: `{"authorship_proven": false, "verdict": "NOT_ELIGIBLE", ...}` — and the contract's own enforcement would have forced `NOT_ELIGIBLE` even had the model returned otherwise.
-
-**Test 4** — wallet registered as `someoneelse`, evidence page authored by `someoneelse`:
-
-> Authorship proven as 'someoneelse' matches registered handle. Evidence shows original educational content explaining GenLayer intelligent contracts and AI consensus mechanism.
-
-Both adjudications reached accepted consensus across the validator set.
+Tests 5 and 6 ran against the **same campaign and the same criteria**. The only variable was whether the evidence was authored by the applicant.
 
 ---
 
 ## Reproducing the Tests
 
-Deploy the contract, then from wallet A:
+Deploy the contract. Add your wallet address to your GitHub bio at `https://github.com/settings/profile`, then:
 
 ```
-register_handle("wallet-a-handle")
+register_handle("github", "your-github-username")
 create_campaign("genlayer-edu", "GenLayer Education Bounty",
                 "Applicant must have created original educational content
                  explaining GenLayer intelligent contracts")
 submit_application("genlayer-edu", "<claim, 20+ chars>", "<evidence URL>")
+judge_application("genlayer-edu", "<your wallet address>")
 ```
 
-**Set-once handle** — call `register_handle` again from wallet A. It reverts.
+**Set-once handle** — call `register_handle` again from the same wallet. It reverts.
+
+**Uniqueness** — from a different wallet, try `register_handle("github", "your-github-username")`. It reverts with the registered wallet address.
+
+**Proof of control** — from a different wallet, try `register_handle("github", "torvalds")` (or any handle whose bio does not contain your wallet). It reverts.
 
 **Anti-replay** — from wallet B, register a handle, then submit wallet A's evidence URL to the same campaign. It reverts.
 
-**Attribution failure** — `judge_application("genlayer-edu", <wallet A>)` where the evidence page names a different author. The status becomes `NOT_ELIGIBLE` and the reason names both handles.
+**Attribution failure** — `judge_application` where the evidence page names a different author. Status becomes `NOT_ELIGIBLE`.
 
-**Happy path** — from wallet B, submit a fresh evidence URL whose page names wallet B's registered handle and whose content satisfies the criteria. Adjudicate it. The status becomes `ELIGIBLE`.
+**Happy path** — submit fresh evidence whose page names the registered handle and satisfies the criteria. Status becomes `ELIGIBLE`.
 
 > **Note on evidence URLs:** `gl.nondet.web.render` cannot crawl `raw.githubusercontent.com` or `github.com/.../blob/...`. Use a repository homepage (`github.com/owner/repo`) or a paste host.
 
@@ -135,7 +163,7 @@ submit_application("genlayer-edu", "<claim, 20+ chars>", "<evidence URL>")
 - **Intelligent Contract:** Python on GenVM v0.2.16
 - **Adjudication:** `gl.eq_principle.prompt_non_comparative` — validators fetch and evaluate independently
 - **Web Access:** `gl.nondet.web.render`
-- **Storage:** `TreeMap` for the identity registry, campaigns, applications, and the evidence ledger
+- **Storage:** `TreeMap` for the identity registry (forward + reverse index), campaigns, applications, and the evidence ledger
 
 ---
 
