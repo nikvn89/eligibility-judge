@@ -1,188 +1,286 @@
-# Testing AirJudge
+# Testing AirJudge — Deployed Proof-of-Control Version
 
-Every test below was executed against the live contract on GenLayer StudioNet.
+Every test below targets the deployed GenLayer StudioNet contract whose source
+matches `contracts/eligibility-judge.py` in this repository.
 
-**Contract:** `0xfd88Ffe790f90c361BB5bdEBC1A483a3d37699F5`
-**Explorer:** https://explorer-studio.genlayer.com/address/0xfd88Ffe790f90c361BB5bdEBC1A483a3d37699F5
+**Contract:** `0xA71B49A47972aEe54CD622c5c9AbcC799061cbbD`
 
----
-
-## Test Environment
-
-Two wallets are required, referred to below as **Wallet A** and **Wallet B**.
-
-Evidence pages must be reachable by `gl.nondet.web.render`. Note that it cannot crawl `raw.githubusercontent.com` or `github.com/.../blob/...` — use a repository homepage (`github.com/owner/repo`) or a paste host instead. The runs documented here used pastebin.
-
-Adjudication calls invoke the validator set and take roughly one to two minutes to finalize. Setup calls are ordinary transactions and return immediately.
+**Explorer:** https://explorer-studio.genlayer.com/address/0xA71B49A47972aEe54CD622c5c9AbcC799061cbbD
 
 ---
 
-## Setup
+## What changed from the earlier version
 
-**1. Register Wallet A's handle**
+The deployed contract now implements both steward-requested attribution protections:
 
+1. **Verifiable proof of control**
+   - `register_handle(provider, web2_handle)` derives the canonical profile URL internally.
+   - Validators fetch that exact profile.
+   - Registration succeeds only if the caller's complete wallet address appears on that profile.
+
+2. **Global handle uniqueness**
+   - `wallet_of_handle` stores `provider:handle -> wallet`.
+   - One wallet can register only one handle.
+   - One provider/handle can belong to only one wallet.
+
+The repository contract source and this testing guide now describe the same deployed contract.
+
+---
+
+## Test environment
+
+Use at least two wallets:
+
+```text
+Wallet A = legitimate handle owner
+Wallet B = second wallet used for duplicate / negative tests
 ```
-register_handle("nikvn89")
+
+Supported providers:
+
+```text
+github
+x
 ```
 
-**2. Create the campaign** (from Wallet A)
+Before registration, publish Wallet A's full address on the canonical public profile.
 
+You can verify the exact URL first with:
+
+```text
+get_expected_profile_url(provider, handle)
 ```
+
+---
+
+## Test 1 — Proof of control succeeds
+
+From Wallet A, first publish Wallet A's complete address on the public profile.
+
+Then call:
+
+```text
+register_handle(
+  "github",
+  "<wallet-a-github-handle>"
+)
+```
+
+Expected:
+
+```text
+SUCCESS
+```
+
+Verify:
+
+```text
+get_handle(WALLET_A)
+get_provider(WALLET_A)
+```
+
+---
+
+## Test 2 — Proof of control fails
+
+From Wallet B, attempt to claim a handle whose canonical profile does not contain Wallet B's address:
+
+```text
+register_handle(
+  "github",
+  "<handle-not-controlled-by-wallet-b>"
+)
+```
+
+Expected revert:
+
+```text
+Proof of control failed for https://github.com/<handle> ...
+```
+
+---
+
+## Test 3 — One handle per wallet
+
+After Wallet A successfully registers a handle, call again from Wallet A:
+
+```text
+register_handle(
+  "github",
+  "another-handle"
+)
+```
+
+Expected revert:
+
+```text
+this wallet already has a registered handle
+```
+
+---
+
+## Test 4 — One wallet per handle
+
+After Wallet A successfully registers:
+
+```text
+github:<wallet-a-handle>
+```
+
+Wallet B attempts:
+
+```text
+register_handle(
+  "github",
+  "<wallet-a-handle>"
+)
+```
+
+Expected deterministic revert:
+
+```text
+handle '<handle>' on github is already registered by wallet <wallet-a>
+```
+
+Verify:
+
+```text
+get_wallet_of_handle(
+  "github",
+  "<wallet-a-handle>"
+)
+```
+
+Expected:
+
+```text
+WALLET_A
+```
+
+---
+
+## Test 5 — Create campaign
+
+Call:
+
+```text
 create_campaign(
-  campaign_id = "genlayer-edu",
-  name        = "GenLayer Education Bounty",
-  criteria    = "Applicant must have created original educational content
-                 explaining GenLayer intelligent contracts"
+  "genlayer-edu",
+  "GenLayer Education Bounty",
+  "Applicant must have created original educational content explaining GenLayer intelligent contracts."
 )
 ```
-
-**3. Submit Wallet A's application**
-
-```
-submit_application(
-  campaign_id  = "genlayer-edu",
-  description  = "I wrote a tutorial explaining how GenLayer intelligent
-                  contracts reach AI consensus",
-  evidence_url = "<paste URL whose page is authored by @alice>"
-)
-```
-
-The evidence page here is deliberately authored by someone other than Wallet A's registered handle. This sets up test 3.
 
 ---
 
-## Test 1 — Handle Registration Is Set-Once
+## Test 6 — Registration required before application
 
-An immutable handle is what makes attribution meaningful. If a wallet could rewrite its handle after seeing which evidence it wanted to claim, the attribution check would be worthless.
+From an unregistered wallet:
 
-**Action** — from Wallet A, which already registered `nikvn89`:
-
-```
-register_handle("anothername")
-```
-
-**Expected** — the transaction reverts:
-
-```
-handle already registered for this wallet
-```
-
-**Result** — passed. The transaction finalized with an error and the handle was unchanged.
-
----
-
-## Test 2 — Anti-Replay On Evidence URLs
-
-Without this control, one good article could be submitted from an unlimited number of wallets.
-
-**Action**
-
-```
-# from Wallet B
-register_handle("someoneelse")
-
+```text
 submit_application(
-  campaign_id  = "genlayer-edu",
-  description  = "Different description but same evidence link as the first applicant",
-  evidence_url = "<the exact URL Wallet A already submitted>"
+  "genlayer-edu",
+  "I created a substantive public contribution explaining GenLayer.",
+  "https://example.com/evidence"
 )
 ```
 
-**Expected** — the transaction reverts:
+Expected revert:
 
+```text
+register and verify a public handle before applying
 ```
+
+---
+
+## Test 7 — Evidence anti-replay
+
+Wallet A submits a fresh HTTPS evidence URL.
+A second applicant attempts to submit the exact same URL to the same campaign.
+
+Expected revert:
+
+```text
 this evidence URL has already been submitted to this campaign
 ```
 
-**Result** — passed. Wallet B could not reuse Wallet A's evidence.
-
-The lock is scoped per campaign, so the same work may still be entered into a different campaign. That is intentional — one contribution can legitimately qualify for several programmes.
-
-`is_evidence_used(campaign_id, evidence_url)` can be read beforehand to check a URL without spending a transaction.
-
 ---
 
-## Test 3 — Adjudication Rejects Unattributed Evidence
+## Test 8 — Attribution failure
 
-**Action**
+Submit evidence whose visible author does not match the applicant's verified handle.
 
-```
-judge_application("genlayer-edu", <Wallet A address>)
-```
+Then call:
 
-Wallet A is registered as `nikvn89`; the evidence page names `@alice` as its author.
-
-**Expected** — `NOT_ELIGIBLE`, with the reason naming the mismatch.
-
-**Result** — passed. The equivalence principle output was:
-
-```json
-{"authorship_proven": false, "verdict": "NOT_ELIGIBLE", "reason": "..."}
-```
-
-And `get_application_reason` returned:
-
-> Visible author is @alice, which does not match registered handle nikvn89; authorship not proven.
-
-Note that the contract does not rely on the model's `verdict` field alone. Because `authorship_proven` came back false, the contract forces `NOT_ELIGIBLE` regardless of what the model reported — a model that returned `{"authorship_proven": false, "verdict": "ELIGIBLE"}` would still be overridden.
-
----
-
-## Test 4 — Adjudication Approves Attributed Evidence
-
-**Action**
-
-```
-# from Wallet B, registered as "someoneelse"
-submit_application(
-  campaign_id  = "genlayer-edu",
-  description  = "I wrote a beginner guide explaining how GenLayer intelligent
-                  contracts reach AI consensus",
-  evidence_url = "<fresh paste URL, authored by someoneelse,
-                   containing an original explainer on GenLayer>"
+```text
+judge_application(
+  "genlayer-edu",
+  WALLET_A
 )
-
-judge_application("genlayer-edu", <Wallet B address>)
 ```
 
-**Expected** — `ELIGIBLE`, with the reason citing both the authorship match and the criteria.
+Expected:
 
-**Result** — passed. `get_application_status` returned `"ELIGIBLE"` and `get_application_reason` returned:
-
-> Authorship proven as 'someoneelse' matches registered handle. Evidence shows original educational content explaining GenLayer intelligent contracts and AI consensus mechanism.
-
----
-
-## Why Tests 3 And 4 Matter Together
-
-Both adjudications ran against **the same campaign and the same criteria**. The only variable between them was whether the evidence page was authored by the applicant's registered handle.
-
-| | Test 3 | Test 4 |
-|---|---|---|
-| Campaign | `genlayer-edu` | `genlayer-edu` |
-| Criteria | identical | identical |
-| Evidence quality | acceptable | acceptable |
-| Author matches handle | no | yes |
-| **Verdict** | **NOT_ELIGIBLE** | **ELIGIBLE** |
-
-This isolates attribution as the deciding factor. A contract that only scored content quality would have approved both.
-
-Both runs reached accepted consensus across the validator set, with individual validators evaluating the evidence independently rather than a single model deciding.
+```text
+NOT_ELIGIBLE
+```
 
 ---
 
-## Additional Guards Not Covered Above
+## Test 9 — Positive adjudication
 
-These are enforced in the contract and can be exercised the same way:
+Use a fresh application whose evidence:
+- is publicly reachable by `gl.nondet.web.render`,
+- visibly identifies the registered handle as author/owner,
+- satisfies the campaign criteria.
 
-- **One application per wallet per campaign** — a second `submit_application` from the same wallet reverts with `application already exists`.
-- **Idempotent judging** — judging an application that is no longer `PENDING` reverts with `application already judged`.
-- **Campaign lifecycle** — `submit_application` and `judge_application` both revert with `campaign is closed` once the creator calls `set_campaign_active(id, false)`. Only the creator may close a campaign.
-- **Registration required** — `submit_application` from a wallet with no registered handle reverts with `register a public handle before applying`.
-- **Fail-closed fetching** — an unreachable evidence URL yields `FETCH_FAILED_NETWORK_ERROR` inside the prompt input, which the criteria map to `NOT_ELIGIBLE`. The transaction does not revert, so a dead link cannot brick an application.
+Expected:
+
+```text
+ELIGIBLE
+```
 
 ---
 
-## Rate Limits
+## Test 10 — Fail-closed fetch
 
-GenLayer Studio applies limits of roughly 30 requests per minute and 500 per hour. Adjudication calls are the expensive ones; the setup and revert tests are cheap. Plan a full run to use a handful of adjudications rather than looping.
+Use an HTTPS URL that cannot be rendered successfully.
+
+Expected:
+
+```text
+NOT_ELIGIBLE
+```
+
+---
+
+## Relevant read methods
+
+```text
+get_handle(address)
+get_provider(address)
+get_wallet_of_handle(provider, handle)
+get_expected_profile_url(provider, handle)
+get_campaign_name(campaign_id)
+get_campaign_criteria(campaign_id)
+get_campaign_creator(campaign_id)
+is_campaign_active(campaign_id)
+is_evidence_used(campaign_id, evidence_url)
+get_application_status(campaign_id, applicant)
+get_application_description(campaign_id, applicant)
+get_application_evidence(campaign_id, applicant)
+get_application_reason(campaign_id, applicant)
+```
+
+---
+
+## Resubmission consistency check
+
+Before pressing **Resubmit**, verify:
+
+```text
+GitHub contract source == exact Studio source at 0xA71B49...
+README references 0xA71B49...
+TESTING references 0xA71B49...
+Explorer evidence points to 0xA71B49...
+```
